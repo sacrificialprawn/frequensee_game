@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>FrequenSee</title>
+    <style>
+    	* { padding: 0; margin: 0; }
+    	canvas { background: #FFFFFF; display: block; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <canvas id="field"></canvas>
+    <script>
+        var canvas = document.getElementById("field");
+        if(window.innerHeight >= (9*window.innerWidth/16)) {
+            canvas.width  = window.innerWidth;
+            canvas.height = Math.floor(9*canvas.width/16);
+        }
+        else {
+            canvas.height = window.innerHeight;
+            canvas.width  = Math.floor(16*canvas.height/9);
+        }
+        var ctx = canvas.getContext("2d");
+
+        var contrLock = 1;
+        var wdth = 8;
+        var numSqs = wdth*wdth;
+        var sqrwdth = 9*canvas.height/(32*wdth); 
+        var gridwdth = sqrwdth*wdth;
+        var diffLim = 255;
+        var sampLim = 6;
+        var otlnwdth = canvas.width/128;
+        const rt2 = 1.0/Math.sqrt(2);
+
+        var origGrid = [];
+        var origGridLuma = [];
+        var origGridDCTCoefs = [];
+        var sampleDCTCoefs = [[],[],[],[],[],[]];
+        var sampleLumas = [[],[],[],[],[],[]];
+        var sampleGrids = [[],[],[],[],[],[]];
+        var altGrids = [[],[]];
+        var gridPlaces = [];
+
+        var samps = 0;
+        var coeffSel = 0;
+        var selectedCoeffs = [];
+        var numCoeffsSelected = 0;
+
+        var isCoeffBar = 0;
+        var horSel = 3;
+        var vertSel = 1;
+        var bkcol = "#FFFFFF";
+        var otlcol = "#0022EE";
+        var fntcol = "#000000";
+        var showCorrectCol = "#FF00FF";
+        var winnerCol = "#FF0000";
+        var blnkcol = "#222222";
+        var btnfnt = Math.round(canvas.height/32)+"px monospace";
+        var vctryfnt = Math.round(canvas.width/12)+"px monospace";
+        var btnfntcol = "#EEEEEE";
+        var brSelectedCol = "#0000FF";
+        var brUnselectedCol = "#0000BB";
+        var brCol = brSelectedCol;
+        var curCol = "#FF0000";
+        var selectedCol = "#000000";
+        var gridChoiceY = Math.round(canvas.height/32);
+        var gridChoiceXStart = Math.round(canvas.width/8);
+        var gridChoiceXDiff = Math.round(gridwdth+canvas.width/32);
+        var selectBarY = Math.round(7*canvas.height/16);
+        var selectBarH = Math.round(canvas.height/64);
+        var selectBarW = 3*canvas.width/16;
+        var selectBarCoeffW = 3*canvas.width/1028;
+        var freqGridRow1Y = gridChoiceY+gridwdth+2*sqrwdth;
+        var freqGridRow2Y = freqGridRow1Y+gridwdth+sqrwdth;
+        var gridLabelsX = canvas.width/256;
+        var gridLabel1Y = gridChoiceY+9*gridwdth/16;
+        var gridLabel2Y = freqGridRow2Y-sqrwdth;
+        var eventLabelYStart = canvas.height/4;
+        var eventLabelYDiff = canvas.height/16;
+
+        var gamesInRow = 0;
+        var score = 0;
+        var lastScore = 0;
+        var level = 1;
+        var gameOver = 0;
+        var gameWon = 0;
+        var selectBarX = 3*canvas.width/4;
+        var buttonsYStart = Math.round(8*canvas.height/16);
+        var buttonsYDiff = Math.round(canvas.height/8);
+        var buttonsH = Math.round(3*canvas.height/32);
+        var buttonsW = Math.round(3*canvas.width/16);
+
+        var alwaysPresets = 0;
+        var defaultPresets = [0,12,24,36,48,60];
+        var userPresets = [];
+        var numUserPresets = 0;
+        var loadedLast = 1;
+        var totalVictory = 0;
+
+        function initRbgY(r, yr) {
+            for(let x = 0; x < numSqs; x++) {
+                r[x] = Math.round(Math.random()*255);
+                yr[x] = r[x]-128;
+            }
+        }
+        
+        function dct(yr, dctCoef) {
+            for(let u = 0; u < wdth; u++) {
+                for(let v = 0; v < wdth; v++) {
+                    let g = 0.0;
+                    for(let x = 0; x < wdth; x++) {
+                        for(let y = 0; y < wdth; y++) {
+                            g += (yr[(y*wdth)+x]*Math.cos((2*x+1)*u*Math.PI/(2*wdth))*Math.cos((2*y+1)*v*Math.PI/(2*wdth)));
+                        }
+                    }
+                    if(u == 0) {
+                        if(v == 0) {
+                            dctCoef[(v*wdth)+u] = g*(1.0/(.5*wdth))*rt2*rt2;
+                        }
+                        else {
+                            dctCoef[(v*wdth)+u] = g*(1.0/(.5*wdth))*rt2;
+                        }
+                    }
+                    else if(v == 0) {
+                        dctCoef[(v*wdth)+u] = g*(1.0/(.5*wdth))*rt2;
+                    }
+                    else {
+                        dctCoef[(v*wdth)+u] = g*(1.0/(.5*wdth));
+                    }
+                }
+            }
+        }
+        
+        function idct(dctCoef, yr) {
+            let cv = 1.0;
+            let cu = 1.0;
+            for(let x = 0; x < wdth; x++) {
+                for(let y = 0; y < wdth; y++) {
+                    let g = 0.0;
+                    for(let u = 0; u < wdth; u++) {
+                        if(u == 0) cu = rt2;
+                        else cu = 1.0;
+                        for(let v = 0; v < wdth; v++) {
+                            if(v == 0) cv = rt2;
+                            else cv = 1.0;
+                            g += (dctCoef[(v*wdth)+u]*cu*cv*Math.cos((2*x+1)*u*Math.PI/(2*wdth))*Math.cos((2*y+1)*v*Math.PI/(2*wdth)));
+                        }
+                    }
+                    yr[(y*wdth)+x] = g*(1.0/(.5*wdth));
+                }
+            }
+        }
+
+        function yToRgb(r2, yr) {
+            for(let x = 0; x < numSqs; x++) {
+                r2[x] = Math.round(yr[x] + 128);
+            }
+        }
+
+        function drawGrid(x,y,cols) {
+            let hx = "";
+            for(let e = 0; e < wdth; e++) {
+                for(let a = 0; a < wdth; a++) {
+                    ctx.beginPath();
+                    ctx.rect(x+(e*sqrwdth), y+(a*sqrwdth), sqrwdth, sqrwdth);
+                    hx = cols[(a*wdth)+e].toString(16);
+                    if(hx.length == 1) {
+                        hx = "0" + hx;
+                    }
+                    ctx.fillStyle = "#" + hx + "0000";
+                    ctx.fill();
+                    ctx.closePath();
+                }
+            }
+        }
+
+        function setAltGrid(grd,dflm) {
+            for(let x = 0; x < numSqs; x++) {
+                grd[x] = origGrid[x] + (Math.round(Math.random()*dflm*2)-dflm);
+                if(grd[x] < 0) {
+                    grd[x] = 0;
+                }
+                else if(grd[x] > 255) {
+                    grd[x] = 255;
+                }
+            }
+        }
+
+        function setSampleDCT(x,n) {
+            if(n < sampLim) {
+                sampleDCTCoefs[n][x] = origGridDCTCoefs[x];
+                if(x < 255) {
+                    sampleDCTCoefs[n][x+1] = origGridDCTCoefs[x+1];
+                }
+                if(x > 0) {
+                    sampleDCTCoefs[n][x-1] = origGridDCTCoefs[x-1];
+                }
+                for(let a = x+2; a <= 255; a++) {
+                    sampleDCTCoefs[n][a] = Math.round(origGridDCTCoefs[a]/Math.pow(Math.log2(a-x),2));
+                }
+                for(let a = x-2; a >= 0; a--) {
+                    sampleDCTCoefs[n][a] = Math.round(origGridDCTCoefs[a]/Math.pow(Math.log2(x-a),2));
+                }
+            }
+        }
+
+        function runSample(x) {
+            if((samps < sampLim) && (x < numSqs)) {
+                let check = 0;
+                for(let a = 0; a < samps; a++) {
+                    if(selectedCoeffs[a] == x) {
+                        drawSelectSameErrorEvent();
+                        check = 1;
+                        break;
+                    }
+                }
+                if(check == 0) {
+                    setSampleDCT(x,samps);
+                    idct(sampleDCTCoefs[samps], sampleLumas[samps]);
+                    yToRgb(sampleGrids[samps], sampleLumas[samps]);
+                    let srtx = 0;
+                    let srty = 0;
+                    if(samps > 2) {
+                        srty = freqGridRow2Y;
+                        srtx = gridChoiceXStart + gridChoiceXDiff*(samps-3);
+                    }
+                    else {
+                        srty = freqGridRow1Y;
+                        srtx = gridChoiceXStart + gridChoiceXDiff*samps;
+                    }
+                    drawGrid(srtx,srty,sampleGrids[samps]);
+                    selectedCoeffs[samps] = x;
+                    numCoeffsSelected += 1;
+                    samps += 1;
+                }
+            }
+        }
+
+        function loadPresets() {
+            if(numUserPresets > 0) {
+                for(let a = 0; a < numUserPresets; a++) {
+                    runSample(userPresets[a]);
+                    if(numCoeffsSelected == 6) break;
+                }
+            }
+            else {
+                for(let a = 0; a < 6; a++) {
+                    runSample(defaultPresets[a]);
+                    if(numCoeffsSelected == 6) break;
+                }
+            }
+            drawSelectBar();
+            drawLoadEvent();
+            loadedLast = 1;
+        }
+
+        function savePresets() {
+            for(let a = 0; a < numCoeffsSelected; a++) {
+                userPresets[a] = selectedCoeffs[a];
+            }
+            numUserPresets = numCoeffsSelected;
+            drawSaveEvent();
+            loadedLast = 1;
+        }
+
+        function revertPresets() {
+            numUserPresets = 0;
+            drawResetEvent();
+        }
+
+        function setAlwaysPresets() {
+            if(alwaysPresets == 0) {
+                alwaysPresets = 1;
+                loadPresets();
+            }
+            else {
+                alwaysPresets = 0;
+            }
+            drawSwitch();
+            drawAlwaysSwicthEvent();
+        }
+
+        function drawSelectBar() {
+            ctx.clearRect(selectBarX,selectBarY-selectBarH, canvas.width-selectBarX, 3*selectBarH);
+            if(isCoeffBar == 1) {
+                brCol = brSelectedCol;
+            }
+            else {
+                brCol = brUnselectedCol;
+            }
+            // draw bar background
+            ctx.beginPath();
+            ctx.rect(selectBarX, selectBarY, selectBarW, selectBarH);
+            ctx.fillStyle = brCol;
+            ctx.fill();
+            ctx.closePath();
+            // draw curser location
+            ctx.beginPath();
+            ctx.rect(selectBarX + coeffSel*selectBarCoeffW, selectBarY, selectBarCoeffW, selectBarH);
+            ctx.fillStyle = curCol;
+            ctx.fill();
+            ctx.closePath();
+            // draw previously selected value markers
+            for(let a = 0; a < numCoeffsSelected; a++) {
+                ctx.beginPath();
+                ctx.rect(selectBarX + selectedCoeffs[a]*selectBarCoeffW, selectBarY, selectBarCoeffW, selectBarH);
+                ctx.fillStyle = selectedCol;
+                ctx.fill();
+                ctx.closePath();
+            }
+            // draw currently highlighted #
+            ctx.font = btnfnt;
+            ctx.fillStyle = fntcol;
+            ctx.fillText(coeffSel, selectBarX+selectBarW+selectBarCoeffW, selectBarY+1.5*selectBarH);
+        }
+
+        function drawSepBar() {
+            ctx.beginPath();
+            ctx.rect(gridChoiceXStart, gridChoiceY+gridwdth+sqrwdth-otlnwdth/2, 2*gridChoiceXDiff+gridwdth, otlnwdth);
+            ctx.fillStyle = blnkcol;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawOtln(x,y,w,h,c) {
+            ctx.strokeStyle = c;
+            ctx.lineWidth = otlnwdth;
+            ctx.strokeRect(x-(otlnwdth/2), y-(otlnwdth/2), w+otlnwdth, h+otlnwdth);
+        }
+
+        function drawRect(x,y,w,h,c) {
+            ctx.beginPath();
+            ctx.rect(x, y, w, h);
+            ctx.fillStyle = c;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawSwitch() {
+            ctx.clearRect(selectBarX+buttonsW/2,buttonsYStart+3*buttonsYDiff, buttonsW/2, buttonsH);
+            let c = blnkcol;
+            if((horSel == 3) && (vertSel == 4)) {
+                c = otlcol;
+            }
+            if(alwaysPresets == 0) {
+                drawRect(selectBarX+buttonsW/2,buttonsYStart+3*buttonsYDiff+buttonsH/4, buttonsW/4, buttonsH/2,c);
+                drawRect(selectBarX+3*buttonsW/4,buttonsYStart+3*buttonsYDiff, buttonsW/4, buttonsH,c);
+            }
+            else {
+                drawRect(selectBarX+3*buttonsW/4,buttonsYStart+3*buttonsYDiff+buttonsH/4, buttonsW/4, buttonsH/2,c);
+                drawRect(selectBarX+buttonsW/2,buttonsYStart+3*buttonsYDiff, buttonsW/4, buttonsH,c);
+            }
+        }
+
+        function drawMenuOptions() {
+            // draw "button" shapes
+            drawRect(selectBarX,buttonsYStart,buttonsW,buttonsH,blnkcol);
+            drawRect(selectBarX,buttonsYStart+buttonsYDiff,buttonsW,buttonsH,blnkcol);
+            drawRect(selectBarX,buttonsYStart+2*buttonsYDiff,buttonsW,buttonsH,blnkcol);
+            // draw switch
+            drawSwitch();
+            // draw labels
+            ctx.font = btnfnt;
+            ctx.fillStyle = btnfntcol;
+            ctx.fillText("Load Preset Freqs", selectBarX+canvas.width/256, buttonsYStart+5*buttonsH/8);
+            ctx.fillText("Save New Presets", selectBarX+canvas.width/128, buttonsYStart+5*buttonsH/8+buttonsYDiff);
+            ctx.fillText("Revert Presets", selectBarX+5*canvas.width/256, buttonsYStart+5*buttonsH/8+2*buttonsYDiff);
+            ctx.fillStyle = fntcol;
+            ctx.fillText("Autoload", selectBarX, buttonsYStart+3*buttonsH/8+3*buttonsYDiff); 
+            ctx.fillText("Presets:", selectBarX, buttonsYStart+7*buttonsH/8+3*buttonsYDiff);
+        }
+
+        function drawScore() {
+            ctx.clearRect(selectBarX, 0, canvas.width-selectBarX, canvas.height/4);
+            ctx.font = btnfnt;
+            ctx.fillStyle = fntcol;
+            ctx.fillText("Level: "+level, selectBarX, canvas.height/16);
+            ctx.fillText("Score: "+score, selectBarX, canvas.height/8);
+            ctx.fillText("Level Win Streak: "+gamesInRow, selectBarX, 3*canvas.height/16);
+        }
+
+        function drawLoadEvent() {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            if(gameOver == 0) {
+                ctx.fillStyle = winnerCol;
+                ctx.fillText("Grids loaded.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+            else {
+                ctx.fillStyle = showCorrectCol;
+                ctx.fillText("Grids cannot be loaded", selectBarX, eventLabelYStart);
+                ctx.fillText("after the round is over.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                ctx.fillStyle = winnerCol;
+                ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+        }
+
+        function drawSaveEvent() {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            if(gameOver == 0) {
+                if(numUserPresets == 0) {
+                    ctx.fillStyle = showCorrectCol;
+                    ctx.fillText("Cannot save until a", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                    ctx.fillText("reference is selected.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+                else {
+                    ctx.fillStyle = winnerCol;
+                    ctx.fillText("Custom grids saved.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+            }
+            else {
+                if(numUserPresets == 0) {
+                    ctx.fillStyle = showCorrectCol;
+                    ctx.fillText("Cannot save until a", selectBarX, eventLabelYStart);
+                    ctx.fillText("reference grid is selected.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                    ctx.fillStyle = winnerCol;
+                    ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+                else {
+                    ctx.fillStyle = winnerCol;
+                    ctx.fillText("Custom grids saved.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                    ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+            }
+        }
+
+        function drawResetEvent() {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            ctx.fillStyle = winnerCol;
+            if(gameOver == 0) {                
+                ctx.fillText("Preset grids set to", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                ctx.fillText("default values.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+            else {
+                ctx.fillText("Preset grids set to", selectBarX, eventLabelYStart);
+                ctx.fillText("default values.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+        }
+
+        function drawAlwaysSwicthEvent() {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            ctx.fillStyle = winnerCol;
+            if(gameOver == 0) {
+                if(alwaysPresets == 1) {
+                    ctx.fillText("Autoload Presets ON.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+                else {
+                    ctx.fillText("Autoload Presets OFF.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }         
+            }
+            else {
+                if(alwaysPresets == 1) {
+                    ctx.fillText("Autoload Presets ON.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                }
+                else {
+                    ctx.fillText("Autoload Presets OFF.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                } 
+                ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+        }
+
+        function drawSelectSameErrorEvent() {
+            if(gameOver == 0) {
+                ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+                ctx.font = btnfnt;
+                ctx.fillStyle = showCorrectCol;            
+                ctx.fillText("You can't select the", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                ctx.fillText("same value twice.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+            }
+        }
+
+        function drawTotalVictory() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // draw basis function in blues
+            let hx = "";
+            let sqwd = canvas.height/(wdth+1);
+            let bw = sqwd/wdth;
+            let xs = (canvas.width - (9*sqwd))/2;
+            let ys = bw/2;
+            let c = 0;
+            for(let e = 0; e < wdth; e++) {
+                for(let a = 0; a < wdth; a++) {
+                    for(let x = 0; x < wdth; x++) {
+                        for(let y = 0; y < wdth; y++) {
+                            ctx.beginPath();
+                            ctx.rect(xs+(e*(sqwd+bw))+(x*bw), ys+(a*(sqwd+bw))+(y*bw), bw, bw);
+                            c = Math.round((Math.cos((x+.5)*e*Math.PI/8.0)*Math.cos((y+.5)*a*Math.PI/8.0)+1)*128-1);
+                            hx = c.toString(16);
+                            if(hx.length == 1) {
+                                hx = "0" + hx;
+                            }
+                            ctx.fillStyle = "#0000" + hx;
+                            ctx.fill();
+                            ctx.closePath();
+                        }
+                    }
+                    
+                }
+            }
+            // write victory text and score
+            ctx.font = vctryfnt;
+            ctx.fillStyle = winnerCol;
+            ctx.fillText("Total Victory", 3.5*canvas.width/20, 2*canvas.height/5);
+            ctx.fillText("Final Score: "+score, canvas.width/10, 3*canvas.height/5);
+        }
+
+        function drawGameWon() {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            ctx.fillStyle = winnerCol;
+            ctx.fillText("CORRECT!", selectBarX, eventLabelYStart);
+            ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+eventLabelYDiff);
+        }
+
+        function drawGameLost(x) {
+            ctx.clearRect(selectBarX, eventLabelYStart-eventLabelYDiff, canvas.width-selectBarX, 4*eventLabelYDiff);
+            ctx.font = btnfnt;
+            ctx.fillStyle = showCorrectCol;
+            ctx.fillText("SORRY! IT WAS GRID "+(gridPlaces[0]+1)+",", selectBarX, eventLabelYStart);
+            ctx.fillText("NOT GRID "+(x+1)+".", selectBarX, eventLabelYStart+eventLabelYDiff);
+            ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+        }
+
+        function drawGridChoiceLabel() {
+            ctx.font = btnfnt;
+            ctx.fillStyle = fntcol;
+            ctx.fillText("Grid", gridLabelsX, gridLabel1Y-sqrwdth/2);
+            ctx.fillText("Choices:", gridLabelsX, gridLabel1Y+sqrwdth/2);
+        }
+
+        function drawRefGridsLabel() {
+            ctx.font = btnfnt;
+            ctx.fillStyle = fntcol;
+            ctx.fillText("Reference", gridLabelsX, gridLabel2Y);
+            ctx.fillText("Grids:", gridLabelsX, gridLabel2Y+sqrwdth);
+        }
+
+        function selectGridOption(x) {
+            gameOver = 1;
+            if(x == gridPlaces[0]) { //selected correct option
+                gamesInRow += 1;
+                score += 10*level;
+                if(numCoeffsSelected > 3) {
+                    score -= 2*level*(numCoeffsSelected-3);
+                }
+                if(gamesInRow == 5) {
+                    lastScore = score;
+                    if(level < 5) {
+                        level += 1;
+                        diffLim -= 50;
+                        gamesInRow = 0;
+                    }
+                    else { //won final level -- end game
+                        contrLock = 1;
+                        totalVictory = 1;
+                        drawTotalVictory();
+                    }
+                }
+                if(totalVictory == 0) {
+                    drawScore();
+                    drawGameWon();
+                }
+            }
+            else { //selected incorrect option
+                gamesInRow = 0;
+                score = lastScore;
+                drawOtln(gridChoiceXStart+gridPlaces[0]*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,showCorrectCol);
+                drawScore();
+                drawGameLost(x);
+            }
+        }
+
+        function initGame() {
+            // reset variables
+            contrLock = 1;
+            gameOver = 0;
+            samps = 0;
+            coeffSel = 0;
+            numCoeffsSelected = 0;
+            // clear screen
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // init grid choices
+            initRbgY(origGrid, origGridLuma);
+            setAltGrid(altGrids[0],diffLim);
+            setAltGrid(altGrids[1],diffLim);
+            // randomly assign grid places
+            gridPlaces[0] = Math.floor(Math.random()*2.99);
+            if(gridPlaces[0] == 0) {
+                gridPlaces[1] = 1;
+                gridPlaces[2] = 2;
+            }
+            else if(gridPlaces[0] == 1) {
+                gridPlaces[1] = 0;
+                gridPlaces[2] = 2;
+            }
+            else {
+                gridPlaces[1] = 0;
+                gridPlaces[2] = 1;
+            }
+            // draw grids
+            drawGrid(gridChoiceXStart+gridPlaces[0]*gridChoiceXDiff,gridChoiceY,origGrid);
+            drawGrid(gridChoiceXStart+gridPlaces[1]*gridChoiceXDiff,gridChoiceY,altGrids[0]);
+            drawGrid(gridChoiceXStart+gridPlaces[2]*gridChoiceXDiff,gridChoiceY,altGrids[1]);
+            // compute DCT
+            dct(origGridLuma, origGridDCTCoefs);
+            // draw frequency blank spots or presets
+            if(alwaysPresets == 1) { //draw preset frequency grids
+                if(numUserPresets > 0) { //use custom presets
+                    for(let a = 0; a < numUserPresets; a++) {
+                        runSample(userPresets[a]);
+                    }
+                    if(numUserPresets < 6) {
+                        for(let a = numUserPresets; a < 6; a++) {
+                            if(a < 3) {
+                                drawRect(gridChoiceXStart + gridChoiceXDiff*a,freqGridRow1Y,gridwdth,gridwdth,blnkcol);
+                            }
+                            else {
+                                drawRect(gridChoiceXStart + gridChoiceXDiff*(a-3),freqGridRow2Y,gridwdth,gridwdth,blnkcol);
+                            }
+                        }
+                    }
+                }
+                else { //use default presents
+                    for(let a = 0; a < 6; a++) {
+                        runSample(defaultPresets[a]);
+                    }
+                }
+            }
+            else { // draw blank squares for frequencies
+                for(let a = 0; a < 3; a++) {
+                    drawRect(gridChoiceXStart + gridChoiceXDiff*a,freqGridRow1Y,gridwdth,gridwdth,blnkcol);
+                    drawRect(gridChoiceXStart + gridChoiceXDiff*a,freqGridRow2Y,gridwdth,gridwdth,blnkcol);
+                }
+            }
+            // draw coefficient selection bar, score/level info, menu buttons, and grid labels
+            drawScore();           
+            drawSepBar();
+            drawGridChoiceLabel();
+            drawRefGridsLabel();
+            if(alwaysPresets == 1) {
+                isCoeffBar = 0;
+                horSel = 3;
+                vertSel = 4;
+            }
+            else if(loadedLast == 1) {
+                isCoeffBar = 0;
+                horSel = 3;
+                vertSel = 1;
+                drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+            }
+            else {
+                isCoeffBar = 1;
+                horSel = 3;
+                vertSel = 0;
+            }
+            loadedLast = 0;
+            drawSelectBar();
+            drawMenuOptions();
+            // allow control operation
+            contrLock = 0;
+        }
+
+        function keyDownHandler(e) {
+            if((e.key == "ArrowRight") || (e.key == "Right")) { //right arrow - 39
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) { 
+                        if(coeffSel < (numSqs-1)) { //slide coefficient selection bar
+                            coeffSel += 1;
+                            drawSelectBar();
+                        }
+                        else { //wrap around to options
+                            isCoeffBar = 0;
+                            drawSelectBar();
+                            horSel = 0;
+                            drawOtln(gridChoiceXStart,gridChoiceY,gridwdth,gridwdth,otlcol);
+                        }
+                    }
+                    else if(horSel < 2) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel += 1;
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    }
+                    else if(horSel == 2) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel += 1;
+                        if(vertSel == 0) {
+                            isCoeffBar = 1;
+                            coeffSel = 0;
+                            drawSelectBar();
+                        }
+                        else if(vertSel == 4) {
+                            drawSwitch();
+                        }
+                        else {
+                            drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                        }
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 0;
+                        drawSwitch();
+                        drawOtln(gridChoiceXStart,gridChoiceY,gridwdth,gridwdth,otlcol);   
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        horSel = 0;
+                        drawOtln(gridChoiceXStart,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    }
+                }
+            }
+            else if((e.key == "ArrowUp") || (e.key == "Up")) { //up arrow - 38
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        drawSelectBar();
+                        horSel -= 1;
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    }
+                    else if((horSel == 3) && (vertSel == 1)) {
+                        vertSel -= 1;
+                        drawOtln(selectBarX,buttonsYStart,buttonsW,buttonsH,bkcol);
+                        isCoeffBar = 1;
+                        drawSelectBar();
+                    }
+                    else if((horSel == 3) && (vertSel < 4)) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel -= 1;
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    }
+                    else if((horSel == 3) && (vertSel == 4)) {
+                        vertSel -= 1;
+                        drawSwitch();
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    }
+                }
+            }
+            else if((e.key == "ArrowLeft") || (e.key == "Left")) { //left arrow - 37
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) { 
+                        if(coeffSel > 0) { //slide coefficient selection bar
+                            coeffSel -= 1;
+                            drawSelectBar();
+                        }
+                        else { //go to grid options
+                            isCoeffBar = 0;
+                            drawSelectBar();
+                            horSel -= 1;
+                            drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                        }
+                    }
+                    else if((horSel == 3) && (vertSel == 4)) {
+                        horSel -= 1;
+                        drawSwitch();
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    }
+                    else if(horSel == 3) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        horSel -= 1;
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    }
+                    else if(horSel > 0) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel -= 1;
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol); 
+                    }
+                    else {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        if(vertSel == 0) {
+                            isCoeffBar = 1;
+                            coeffSel = numSqs-1;
+                            drawSelectBar();
+                        }
+                        else if(vertSel == 4) {
+                            drawSwitch();
+                        }
+                        else {
+                            drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                        }
+                    }
+                }
+            }
+            else if((e.key == "ArrowDown") || (e.key == "Down")) { //down arrow - 40
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(horSel < 3) {
+                        isCoeffBar = 1;
+                        vertSel = 0;
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        drawSelectBar();
+                    }
+                    else if(isCoeffBar == 1) {
+                        vertSel += 1;
+                        drawOtln(selectBarX,buttonsYStart,buttonsW,buttonsH,otlcol);
+                        isCoeffBar = 0;
+                        drawSelectBar();
+                    }
+                    else if(vertSel < 3) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel += 1;
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    }
+                    else if(vertSel == 3) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel += 1;
+                        drawSwitch();
+                    }
+                }
+            }
+            else if((e.key == " ") || (e.key == "Spacebar")) { //spacebar - 32
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(gameOver == 0) {
+                        if(isCoeffBar == 1) {
+                        runSample(coeffSel);
+                        }
+                        else if(horSel < 3) {
+                            selectGridOption(horSel);
+                        }
+                        else if(vertSel == 1) {
+                            loadPresets();
+                        }
+                    }
+                    if(horSel == 3) {
+                        if(vertSel == 1) {
+                            drawLoadEvent();
+                        }
+                        if(vertSel == 2) {
+                            savePresets();
+                        }
+                        else if(vertSel == 3) {
+                            revertPresets();
+                        }
+                        else if(vertSel == 4) {
+                            setAlwaysPresets();
+                        }
+                    }
+                }
+            }
+            else if(e.key == "Enter") { //enter - 13
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(gameOver == 1) {
+                        initGame();
+                    }
+                    else if(isCoeffBar == 1) {
+                        runSample(coeffSel);
+                    }
+                    else if(horSel < 3) {
+                        selectGridOption(horSel);
+                    }
+                    else if(vertSel == 1) {
+                        loadPresets();
+                    }
+                    else if(vertSel == 2) {
+                        savePresets();
+                    }
+                    else if(vertSel == 3) {
+                        revertPresets();
+                    }
+                    else if(vertSel == 4) {
+                        setAlwaysPresets();
+                    }
+                }
+            }
+            else if(e.key == "1") { //select grid 0
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        horSel = 0;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 0;
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 0;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        horSel = 0;
+                    }
+                    drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    if(gameOver == 0) {
+                        selectGridOption(0);
+                    }
+                }
+            }
+            else if(e.key == "2") { //select grid 1
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        horSel = 1;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 1;
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 1;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        horSel = 1;
+                    }
+                    drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    if(gameOver == 0) {
+                        selectGridOption(1);
+                    }
+                }
+            }
+            else if(e.key == "3") { //select grid 2
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        horSel = 2;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 2;
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 2;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        horSel = 2;
+                    }
+                    drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                    if(gameOver == 0) {
+                        selectGridOption(2);
+                    }
+                }
+            }
+            else if(e.key == "l") { //load presets 
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        vertSel = 1;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        vertSel = 1;
+                    }
+                    else if(vertSel == 4) {
+                        vertSel = 1;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel = 1;
+                    }
+                    drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    if(gameOver == 0) {
+                        loadPresets();
+                    }
+                    else {
+                        drawLoadEvent();
+                    }
+                }
+            }
+            else if(e.key == "s") { //save new presets 
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        vertSel = 2;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        vertSel = 2;
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 3;
+                        vertSel = 2;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel = 2;
+                    }
+                    drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    savePresets();
+                }
+            }
+            else if(e.key == "r") { //reset presets to default 
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        vertSel = 3;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        vertSel = 3;
+                    }
+                    else if(vertSel == 4) {
+                        horSel = 3;
+                        vertSel = 3;
+                        drawSwitch();
+                    }
+                    else {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel = 3;
+                    }
+                    drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                    revertPresets();
+                }
+            }
+            else if(e.key == "a") { // turn outload presets on/off
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(isCoeffBar == 1) {
+                        isCoeffBar = 0;
+                        vertSel = 4;
+                        drawSelectBar();
+                    }
+                    else if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        vertSel = 4;
+                    }
+                    else if(vertSel < 4) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel = 4;
+                    }
+                    setAlwaysPresets();
+                }
+            }
+            else if(e.key == "b") { // go to coefficient selection bar
+                e.preventDefault();
+                if(contrLock == 0) {
+                    if(horSel < 3) {
+                        drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,bkcol);
+                        horSel = 3;
+                        vertSel = 0;
+                    }
+                    else if(vertSel == 4) {
+                        vertSel = 0;
+                        drawSwitch();
+                    }
+                    else if(isCoeffBar == 0) {
+                        drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,bkcol);
+                        vertSel = 0;
+                    }
+                    isCoeffBar = 1;
+                    drawSelectBar();
+                }
+            }
+        }
+
+        initGame();
+
+        document.addEventListener("keydown", keyDownHandler, false);
+
+        function resizeCanvas() {
+            // pause controls 
+            contrLock = 1;
+            //resize canvas
+            if(window.innerHeight >= (9*window.innerWidth/16)) {
+                canvas.width  = window.innerWidth;
+                canvas.height = Math.floor(9*canvas.width/16);
+            }
+            else {
+                canvas.height = window.innerHeight;
+                canvas.width  = Math.floor(16*canvas.height/9);
+            }
+            ctx = canvas.getContext("2d");
+            //reset canvas size-dependent variables
+            sqrwdth = 9*canvas.height/(32*wdth); 
+            gridwdth = sqrwdth*wdth;
+            otlnwdth = canvas.width/128;
+            btnfnt = Math.round(canvas.height/32)+"px monospace";
+            vctryfnt = Math.round(canvas.width/12)+"px monospace";
+            gridChoiceY = Math.round(canvas.height/32);
+            gridChoiceXStart = Math.round(canvas.width/8);
+            gridChoiceXDiff = Math.round(gridwdth+canvas.width/32);
+            selectBarY = Math.round(7*canvas.height/16);
+            selectBarH = Math.round(canvas.height/64);
+            selectBarW = 3*canvas.width/16;
+            selectBarCoeffW = 3*canvas.width/1028;
+            freqGridRow1Y = gridChoiceY+gridwdth+2*sqrwdth;
+            freqGridRow2Y = freqGridRow1Y+gridwdth+sqrwdth;
+            gridLabelsX = canvas.width/256;
+            gridLabel1Y = gridChoiceY+9*gridwdth/16;
+            gridLabel2Y = freqGridRow2Y-sqrwdth;
+            eventLabelYStart = canvas.height/4;
+            eventLabelYDiff = canvas.height/16;
+            selectBarX = 3*canvas.width/4;
+            buttonsYStart = Math.round(8*canvas.height/16);
+            buttonsYDiff = Math.round(canvas.height/8);
+            buttonsH = Math.round(3*canvas.height/32);
+            buttonsW = Math.round(3*canvas.width/16);
+            if(totalVictory == 0) { //not total victory
+                // redraw necessary elements
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawGrid(gridChoiceXStart+gridPlaces[0]*gridChoiceXDiff,gridChoiceY,origGrid);
+                drawGrid(gridChoiceXStart+gridPlaces[1]*gridChoiceXDiff,gridChoiceY,altGrids[0]);
+                drawGrid(gridChoiceXStart+gridPlaces[2]*gridChoiceXDiff,gridChoiceY,altGrids[1]);
+                drawSelectBar();
+                drawScore();
+                drawMenuOptions();
+                drawSepBar();
+                drawGridChoiceLabel();
+                drawRefGridsLabel();
+                for(let a = 0; a < numCoeffsSelected; a++) {
+                    if(a > 2) {
+                        drawGrid(gridChoiceXStart+gridChoiceXDiff*(a-3),freqGridRow2Y,sampleGrids[a]);
+                    }
+                    else {
+                        drawGrid(gridChoiceXStart+gridChoiceXDiff*a,freqGridRow1Y,sampleGrids[a]);
+                    }
+                }
+                if(numCoeffsSelected < 6) {
+                    for(let a = numCoeffsSelected; a < 6; a++) {
+                        if(a < 3) {
+                            drawRect(gridChoiceXStart + gridChoiceXDiff*a,freqGridRow1Y,gridwdth,gridwdth,blnkcol);
+                        }
+                        else {
+                            drawRect(gridChoiceXStart + gridChoiceXDiff*(a-3),freqGridRow2Y,gridwdth,gridwdth,blnkcol);
+                        }
+                    }
+                }
+                // draw outline on selected option if appropriate
+                if(horSel < 3) {
+                    drawOtln(gridChoiceXStart+horSel*gridChoiceXDiff,gridChoiceY,gridwdth,gridwdth,otlcol);
+                }
+                else if((vertSel > 0) && (vertSel < 4)){
+                    drawOtln(selectBarX,buttonsYStart+(vertSel-1)*buttonsYDiff,buttonsW,buttonsH,otlcol);
+                }
+                // draw message
+                ctx.font = btnfnt;
+                ctx.fillStyle = fntcol;
+                if(gameOver == 1) {
+                    ctx.fillText("Screen resized.", selectBarX, eventLabelYStart+1*eventLabelYDiff);
+                    ctx.fillStyle = winnerCol;
+                    ctx.fillText("'ENTER' TO PLAY AGAIN.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+                else {
+                    ctx.fillText("Screen resized.", selectBarX, eventLabelYStart+2*eventLabelYDiff);
+                }
+
+                // resume controls 
+                contrLock = 0;
+            }
+            else {// total victory
+                drawTotalVictory();
+            }
+        }
+
+        window.addEventListener("resize", resizeCanvas, false);
+
+    </script>
+</body>
+</html>
